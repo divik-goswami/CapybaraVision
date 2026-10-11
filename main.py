@@ -15,6 +15,9 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QComboBox, QCheckBox,
     QMessageBox, QSystemTrayIcon, QMenu, QGroupBox
 )
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
+
+SINGLE_INSTANCE_IPC = "CapybaraVision_IPC_Server"
 
 import config
 from gemini_client import test_api_key
@@ -678,8 +681,50 @@ def main():
     app.setQuitOnLastWindowClosed(False)
     app.setStyle("Fusion")
 
+    # 1. Single Instance Check: Mutex + Local Socket IPC
+    import ctypes
+    MUTEX_NAME = "CapybaraVision_SingleInstance_Mutex"
+    mutex = ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_NAME)
+    is_already_running = (ctypes.windll.kernel32.GetLastError() == 183)  # ERROR_ALREADY_EXISTS
+
+    test_socket = QLocalSocket()
+    test_socket.connectToServer(SINGLE_INSTANCE_IPC)
+    if test_socket.waitForConnected(400):
+        # Existing instance found! Send wake-up command and exit immediately
+        cmd = "TRAY" if "--tray" in sys.argv else "SHOW"
+        test_socket.write(cmd.encode("utf-8"))
+        test_socket.waitForBytesWritten(1000)
+        test_socket.disconnectFromServer()
+        sys.exit(0)
+    elif is_already_running:
+        # Another instance holds the mutex even if IPC socket was unresponsive
+        sys.exit(0)
+
+    # Retain mutex handle for lifetime of process
+    app._single_instance_mutex = mutex
+
+    # 2. Primary instance: Launch app window
     start_minimized = "--tray" in sys.argv
     win = MainWindow(start_minimized=start_minimized)
+
+    # Start local server to listen for any subsequent launch attempts
+    QLocalServer.removeServer(SINGLE_INSTANCE_IPC)
+    ipc_server = QLocalServer(win)
+    ipc_server.listen(SINGLE_INSTANCE_IPC)
+
+    def on_ipc_connection():
+        client = ipc_server.nextPendingConnection()
+        if client:
+            client.waitForReadyRead(500)
+            msg = bytes(client.readAll()).decode("utf-8", errors="ignore").strip()
+            if msg == "SHOW":
+                win.open_from_tray()
+            elif msg == "CAPTURE":
+                win.manual_capture()
+            client.disconnectFromServer()
+
+    ipc_server.newConnection.connect(on_ipc_connection)
+
     sys.exit(app.exec())
 
 

@@ -65,6 +65,19 @@ def test_api_key(api_key: str) -> Tuple[bool, str, List[str]]:
         return False, f"API test failed: {safe_msg}", []
 
 
+_client_pool = {}
+
+
+def get_cached_client(api_key: str):
+    """Reuse existing genai.Client instance to keep TLS connection pool pre-warmed."""
+    cleaned = api_key.strip()
+    if not cleaned or genai is None:
+        return None
+    if cleaned not in _client_pool:
+        _client_pool[cleaned] = genai.Client(api_key=cleaned)
+    return _client_pool[cleaned]
+
+
 class GeminiStreamWorker(QThread):
     """Worker thread that streams Capybara Vision responses for image + prompt analysis."""
     chunk_received = Signal(str)
@@ -77,6 +90,7 @@ class GeminiStreamWorker(QThread):
         model_name: str,
         prompt: str,
         image_bytes: Optional[bytes] = None,
+        mime_type: str = "image/jpeg",
         system_instruction: str = "",
         chat_history: Optional[List[dict]] = None
     ):
@@ -85,6 +99,7 @@ class GeminiStreamWorker(QThread):
         self.model_name = model_name
         self.prompt = prompt
         self.image_bytes = image_bytes
+        self.mime_type = mime_type
         self.system_instruction = system_instruction
         self.chat_history = chat_history or []
         self._is_cancelled = False
@@ -102,13 +117,16 @@ class GeminiStreamWorker(QThread):
             return
 
         try:
-            client = genai.Client(api_key=self.api_key)
+            client = get_cached_client(self.api_key)
+            if client is None:
+                client = genai.Client(api_key=self.api_key)
+
             contents = []
 
-            # If there's an image, pass it as first part
+            # If there's an image, pass it with its optimized MIME type
             if self.image_bytes:
                 contents.append(
-                    types.Part.from_bytes(data=self.image_bytes, mime_type="image/png")
+                    types.Part.from_bytes(data=self.image_bytes, mime_type=self.mime_type)
                 )
 
             # Add prior conversation turns if any
@@ -117,11 +135,11 @@ class GeminiStreamWorker(QThread):
 
             contents.append(self.prompt)
 
-            config = None
-            if self.system_instruction:
-                config = types.GenerateContentConfig(
-                    system_instruction=self.system_instruction
-                )
+            # Low temperature (0.2) delivers faster, more deterministic and concise answers
+            config = types.GenerateContentConfig(
+                temperature=0.2,
+                system_instruction=self.system_instruction if self.system_instruction else None
+            )
 
             models_to_try = [self.model_name]
             # Fast fallback alternatives if 503/high-demand or rate-limit spike occurs

@@ -376,10 +376,18 @@ class CaptureOverlay(QWidget):
         rh = max(1, min(rh, self.raw_pixmap.height() - ry))
 
         cropped = self.raw_pixmap.copy(rx, ry, rw, rh)
+
+        # Performance Optimization:
+        # Scale oversized regions down to max 1400px to drastically reduce network transfer and inference latency
+        max_dim = 1400
+        if cropped.width() > max_dim or cropped.height() > max_dim:
+            cropped = cropped.scaled(max_dim, max_dim, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+        # Fast JPEG encoding (quality 90) produces ~50-150KB payloads instead of 2-8MB PNGs
         byte_array = QByteArray()
         buffer = QBuffer(byte_array)
         buffer.open(QIODevice.WriteOnly)
-        cropped.toImage().save(buffer, "PNG")
+        cropped.toImage().save(buffer, "JPEG", 90)
         self.cropped_png_bytes = bytes(byte_array.data())
 
         # Position Answer Card
@@ -400,6 +408,7 @@ class CaptureOverlay(QWidget):
             model_name=model_name,
             prompt=prompt,
             image_bytes=self.cropped_png_bytes,
+            mime_type="image/jpeg",
             system_instruction=sys_inst,
             chat_history=[]
         )

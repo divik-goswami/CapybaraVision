@@ -192,25 +192,64 @@ class RegionSearchApp(QObject):
         QApplication.quit()
 
 
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
+
+SINGLE_INSTANCE_IPC = "CapybaraVision_IPC_Server"
+
+
 def main():
     # Set high DPI attributes
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setStyle("Fusion")
 
-    # Verify API key status
+    # 1. Single Instance Check: Mutex + Local Socket IPC
+    import ctypes
+    MUTEX_NAME = "CapybaraVision_SingleInstance_Mutex"
+    mutex = ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_NAME)
+    is_already_running = (ctypes.windll.kernel32.GetLastError() == 183)  # ERROR_ALREADY_EXISTS
+
+    test_socket = QLocalSocket()
+    test_socket.connectToServer(SINGLE_INSTANCE_IPC)
+    if test_socket.waitForConnected(400):
+        # Existing instance found! Signal capture and exit
+        test_socket.write(b"CAPTURE")
+        test_socket.waitForBytesWritten(1000)
+        test_socket.disconnectFromServer()
+        sys.exit(0)
+    elif is_already_running:
+        sys.exit(0)
+
+    app._single_instance_mutex = mutex
+
+    # 2. Primary instance setup
     api_key = config.get_api_key()
+    app_coordinator = RegionSearchApp()
     if not api_key:
-        # Prompt user to open settings on first launch
-        app_coordinator = RegionSearchApp()
         app_coordinator.tray.showMessage(
             "Capybara Vision Ready",
             "Tip: Set your Capybara Vision API key in Preferences or press Ctrl+Shift+S to start.",
             QSystemTrayIcon.Information,
             4000
         )
-    else:
-        app_coordinator = RegionSearchApp()
+
+    # Listen for duplicate launches
+    QLocalServer.removeServer(SINGLE_INSTANCE_IPC)
+    ipc_server = QLocalServer(app_coordinator)
+    ipc_server.listen(SINGLE_INSTANCE_IPC)
+
+    def on_ipc_connection():
+        client = ipc_server.nextPendingConnection()
+        if client:
+            client.waitForReadyRead(500)
+            msg = bytes(client.readAll()).decode("utf-8", errors="ignore").strip()
+            if msg == "CAPTURE":
+                app_coordinator.start_capture()
+            elif msg == "SHOW":
+                app_coordinator.open_settings()
+            client.disconnectFromServer()
+
+    ipc_server.newConnection.connect(on_ipc_connection)
 
     sys.exit(app.exec())
 

@@ -1,23 +1,12 @@
-# Python
 __pycache__/
 *.py[cod]
-*.class
+*$py.class
 *.egg-info/
-.venv/
-venv/
-env/
-
-# Build outputs & executables
 dist/
 build/
-*.exe
-
-# Secrets & credentials
+*.spec
 .env
-.env.*
-.key_enc
-.key_fallback
-
-# Logs & temp
+*.exe
+.venv/
+venv/
 *.log
-*.tmp
