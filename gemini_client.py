@@ -4,6 +4,7 @@ from typing import List, Tuple, Generator, Optional
 from PySide6.QtCore import QThread, Signal
 from PIL import Image
 import io
+import time
 
 try:
     from google import genai
@@ -46,8 +47,8 @@ def test_api_key(api_key: str) -> Tuple[bool, str, List[str]]:
             if "gemini" in name.lower() and not "embedding" in name.lower():
                 model_names.append(name)
         
-        # Sort so modern flash/pro models come first
-        preferred_order = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+        # Sort so modern flash models come first
+        preferred_order = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
         sorted_models = []
         for p in preferred_order:
             if p in model_names:
@@ -56,7 +57,7 @@ def test_api_key(api_key: str) -> Tuple[bool, str, List[str]]:
         sorted_models.extend(sorted(model_names))
 
         if not sorted_models:
-            sorted_models = ["gemini-3.8-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+            sorted_models = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash"]
             
         return True, "API Key is valid!", sorted_models
     except Exception as e:
@@ -122,20 +123,61 @@ class GeminiStreamWorker(QThread):
                     system_instruction=self.system_instruction
                 )
 
-            response = client.models.generate_content_stream(
-                model=self.model_name,
-                contents=contents,
-                config=config,
-            )
+            models_to_try = [self.model_name]
+            # Fast fallback alternatives if 503/high-demand or rate-limit spike occurs
+            fallback_candidates = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash"]
+            for fb in fallback_candidates:
+                if fb not in models_to_try:
+                    models_to_try.append(fb)
 
-            for chunk in response:
+            last_error = None
+            for current_model in models_to_try:
                 if self._is_cancelled:
                     return
-                text = chunk.text
-                if text:
-                    self.chunk_received.emit(text)
 
-            self.finished_success.emit()
+                # Retry up to 2 attempts for transient capacity spikes
+                for attempt in range(2):
+                    if self._is_cancelled:
+                        return
+                    try:
+                        response = client.models.generate_content_stream(
+                            model=current_model,
+                            contents=contents,
+                            config=config,
+                        )
+
+                        received_any = False
+                        for chunk in response:
+                            if self._is_cancelled:
+                                return
+                            text = chunk.text
+                            if text:
+                                received_any = True
+                                self.chunk_received.emit(text)
+
+                        if received_any:
+                            self.finished_success.emit()
+                            return
+                    except Exception as e:
+                        last_error = e
+                        err_str = str(e).lower()
+                        # Detect transient capacity / 503 high demand / 429 quota spikes
+                        is_transient = any(w in err_str for w in ("503", "unavailable", "high demand", "429", "rate limit", "overloaded"))
+                        if is_transient and attempt == 0 and not self._is_cancelled:
+                            time.sleep(1.2)
+                            continue
+                        elif is_transient:
+                            # Try next fallback model
+                            break
+                        else:
+                            # Permanent error (e.g. invalid credentials) - fail fast
+                            safe_err = _sanitize_error_msg(str(e), self.api_key)
+                            self.failed.emit(f"Error querying Capybara Vision: {safe_err}")
+                            return
+
+            if not self._is_cancelled and last_error:
+                safe_err = _sanitize_error_msg(str(last_error), self.api_key)
+                self.failed.emit(f"Error querying Capybara Vision: {safe_err}")
         except Exception as e:
             if not self._is_cancelled:
                 safe_err = _sanitize_error_msg(str(e), self.api_key)
