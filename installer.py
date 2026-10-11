@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Capybara Vision"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 APP_PUBLISHER = "Capybara Vision"
 DEFAULT_INSTALL_SUBDIR = Path("Programs") / "CapybaraVision"
 
@@ -464,7 +464,7 @@ class InstallerWindow(QMainWindow):
         lbl_head.setProperty("class", "Title")
         title_col.addWidget(lbl_head)
 
-        lbl_sub = QLabel("Screen-Region Visual AI Search • Version 1.0.0", self)
+        lbl_sub = QLabel(f"Screen-Region Visual AI Search • Version {APP_VERSION}", self)
         lbl_sub.setProperty("class", "SubTitle")
         title_col.addWidget(lbl_sub)
         header.addLayout(title_col)

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
 SINGLE_INSTANCE_IPC = "CapybaraVision_IPC_Server"
+APP_VERSION = "1.0.1"
 
 import config
 from gemini_client import test_api_key
@@ -229,7 +230,7 @@ class MainWindow(QMainWindow):
         if self.cfg.get("start_with_windows", True):
             config.configure_windows_startup(True)
 
-        self.setWindowTitle("Capybara Vision")
+        self.setWindowTitle(f"Capybara Vision v{APP_VERSION}")
         self.setFixedSize(390, 480)
         self.setWindowIcon(create_app_icon())
 
