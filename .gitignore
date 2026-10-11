@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.class
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Build outputs & executables
+dist/
+build/
+*.exe
+
+# Secrets & credentials
+.env
+.env.*
+.key_enc
+.key_fallback
+
+# Logs & temp
+*.log
+*.tmp
